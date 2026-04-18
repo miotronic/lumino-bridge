@@ -1,25 +1,30 @@
 # ⚡ Lumino Bridge
 
-**ESP32 programmer for cheap RS-485 RGBW ceiling fixtures (UCS512C chip)**
-
-These fixtures are sold on AliExpress for a fraction of the price of name-brand smart lights, but they ship with *no documentation* on how to program their DMX addresses. This project reverse-engineers the proprietary unlock protocol and gives you a dead-simple web UI to get them working.
-
-Once programmed, the fixtures respond to standard **DMX512** — use them with WLED, QLC+, or any DMX controller.
+**Wi-Fi programmer for UCS512C RS-485 RGBW fixtures — $3.50 in hardware, zero compromises**
 
 ---
 
-## What it solves
+## The problem
 
-UCS512C-based fixtures require a **proprietary unlock sequence** before they will accept DMX address programming. Without it, pressing the fixture's own address button does nothing and no standard DMX programmer works.
+AliExpress is full of beautiful RGBW ceiling fixtures built around the UCS512C chip — $3 a piece, solid construction, great light quality. The kind of deal that makes you buy thirty of them before you've thought it through.
 
-Lumino Bridge:
-1. Sends the reverse-engineered unlock sequence over RS-485
-2. Assigns DMX addresses 1–512 sequentially
-3. Fixtures permanently store their address and respond to standard DMX from that point on
+Then they arrive, and you discover the catch.
 
-### Why RS-485 programming?
+The only way to program their DMX addresses is with a dedicated Chinese programmer: a chunky brick that reads settings off an SD card, has no wireless connectivity, no app, no automation support, and costs $60 or more. You end up hunched over each fixture with this thing, manually configuring lights one by one, and when you're done they're still just dumb DMX fixtures — no smart home, no Home Assistant, no WLED effects. Just $3 lights held hostage by a $60 dinosaur.
 
-The UCS512C datasheet documents official **PI/PO coding lines** for daisy-chaining address programming. However, those lines are only accessible on the bare chip — finished fixtures do not expose them. Lumino Bridge instead programs addresses entirely over the RS-485 bus using a method reverse-engineered from a third-party programmer, making it practical for real-world fixtures where PI/PO lines are inaccessible.
+It doesn't have to be this way.
+
+---
+
+## The solution
+
+Lumino Bridge is an ESP32-based programmer that replaces the proprietary box entirely. Flash it onto a $3 ESP32, wire up a $0.50 MAX485 module, and you have a Wi-Fi-connected programmer that fits in your pocket and talks to your fixtures over RS-485.
+
+Connect to its access point, open a browser, hit **UNLOCK** then **START** — and watch it assign DMX addresses to every fixture on the bus in minutes. No SD cards. No cables to a laptop. No ancient software. Once programmed, the fixtures respond to standard DMX512 and work immediately with **WLED**, **QLC+**, and **Home Assistant**.
+
+The proprietary unlock sequence that makes this possible was reverse-engineered from a third-party programmer (the UCS512C does have official PI/PO address lines per the datasheet, but they're inaccessible in finished fixtures — so we go through RS-485 instead). The full protocol is documented in [`docs/protocol.md`](docs/protocol.md).
+
+**$3.50 in hardware. A five-minute setup. Thirty smart ceiling lights.**
 
 ---
 
@@ -110,6 +115,22 @@ After programming fixtures with Lumino Bridge:
 3. Set LED count to match your fixture count
 
 Full WLED DMX integration guide: [`docs/wled-integration.md`](docs/wled-integration.md)
+
+---
+
+## Roadmap
+
+Lumino Bridge is just the beginning.
+
+The current firmware does one job — programming fixtures — and hands off to WLED for live control. That means two devices, two flash jobs, two points of failure. The next milestone changes that:
+
+### Custom WLED build with native UCS512C addressing
+
+A custom WLED firmware with a built-in UCS512C addressing mode. One ESP32 does everything: program the fixtures directly from the WLED UI, then switch into live DMX control without touching a second device. No separate programmer. No workflow interruption. Just flash, address, and go.
+
+This will make deploying a full room of RS-485 fixtures as seamless as any off-the-shelf smart light system — and significantly more capable.
+
+If you want to help build it or test early builds, watch this repo and open an issue.
 
 ---
 
