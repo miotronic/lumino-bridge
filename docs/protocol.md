@@ -9,6 +9,20 @@ until the firmware reproduced the correct waveforms.
 
 ---
 
+## Note on PI/PO vs. RS-485 programming
+
+The UCS512C datasheet defines official **PI/PO coding lines** for address
+programming — a daisy-chain scheme where each chip passes an incremented
+address token to the next. This is the manufacturer-intended method.
+
+Lumino Bridge does **not** use PI/PO. Those lines are only accessible on the
+bare chip; finished fixtures do not expose them. The protocol described here
+programs addresses entirely over the RS-485 bus, reverse-engineered from
+a third-party programmer. This makes Lumino Bridge practical for use with
+complete, assembled fixtures where PI/PO lines are not accessible.
+
+---
+
 ## Physical layer
 
 - **Interface:** RS-485 half-duplex

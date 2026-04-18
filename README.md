@@ -17,6 +17,10 @@ Lumino Bridge:
 2. Assigns DMX addresses 1–512 sequentially
 3. Fixtures permanently store their address and respond to standard DMX from that point on
 
+### Why RS-485 programming?
+
+The UCS512C datasheet documents official **PI/PO coding lines** for daisy-chaining address programming. However, those lines are only accessible on the bare chip — finished fixtures do not expose them. Lumino Bridge instead programs addresses entirely over the RS-485 bus using a method reverse-engineered from a third-party programmer, making it practical for real-world fixtures where PI/PO lines are inaccessible.
+
 ---
 
 ## Hardware
