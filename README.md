@@ -6,7 +6,7 @@
 
 ## The problem
 
-AliExpress is full of beautiful RGBW ceiling fixtures built around the UCS512C chip — $3 a piece, solid construction, great light quality. The kind of deal that makes you buy thirty of them before you've thought it through.
+AliExpress is full of beautiful RGBW fixtures built around the UCS512C chip, solid construction, great light quality. The kind of deal that makes you buy thirty of them before you've thought it through.
 
 Then they arrive, and you discover the catch.
 
