@@ -47,15 +47,17 @@ const char* password = "lumino123";
 // ─── DMX / Protocol constants ─────────────────────────────────────────────────
 
 #define DMX_BAUD        250000  // Standard DMX baud rate — do not change
-#define DMX_CHANNELS         4  // Channels per fixture: R, G, B, W
 #define DMX_ADDRESSES      512  // Max fixtures on one DMX universe
 #define MARKER_BYTE       0x7F  // Value (127) written to mark the addressed fixture
-#define DMX_FRAME_SIZE    1542  // Total bytes per DMX frame (start byte + channel data)
+#define DMX_FRAME_SIZE    2048  // Max buffer: 512 fixtures × 4 channels
 
 // Timing for the DMX break signal
 // A "break" is a long LOW pulse that tells all fixtures a new frame is starting
-#define BREAK_US   120   // Break duration in microseconds (DMX spec minimum: 92µs)
-#define MAB_US      12   // Mark After Break — short HIGH pause after break
+// Target wire timings (measured from K1000C with logic analyzer):
+//   BREAK = 232.25µs, MAB = 84µs
+// Overhead on ESP32 is ~3.5µs for BREAK, ~19µs for MAB
+#define BREAK_US   228   // Break duration → ~232µs on wire
+#define MAB_US      65   // Mark After Break → ~84µs on wire
 
 // Timing between frames
 #define INIT_PAUSE    250   // 250ms pause between init frames during unlock sequence
@@ -68,16 +70,87 @@ const char* password = "lumino123";
 // programmer using a logic analyzer — these values were captured directly
 // from the RS-485 bus and confirmed to work.
 //
-// Each "transition block" sends 512 packets of 8 bytes.
-// Bytes 1-6 are fixed magic values.
-// Bytes 7 and 8 cycle through these tables (32 × 16 = 512 combinations).
+// 4CH: nested loop — 32 byte7 values × 16 byte8 values = 512 packets total
+// 3CH: flat sequence — 510 packets (groups have varying byte8 counts: 20/21/22)
 //
-const uint8_t byte7vals[32] = {
-  1,9,17,25,33,41,49,57,65,73,81,89,97,105,113,121,
-  129,137,145,153,161,169,177,185,193,201,209,217,225,233,241,249
+
+// ── 4CH tables ──
+static const uint8_t byte7vals_4ch[32] = {
+  1,129,65,193,33,161,97,225,17,145,81,209,49,177,113,241,
+  9,137,73,201,41,169,105,233,25,153,89,217,57,185,121,249
 };
-const uint8_t byte8vals[16] = {
+static const uint8_t byte8vals_4ch[16] = {
   2,34,18,50,10,42,26,58,6,38,22,54,14,46,30,62
+};
+
+// ── 3CH flat sequences (510 entries, direct from K1000C logic analyzer capture) ──
+static const uint8_t byte7seq_3ch[510] = {
+  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  1,1,1,1,1,1,129,129,129,129,129,129,129,129,129,129,
+  129,129,129,129,129,129,129,129,129,129,129,129,65,65,65,65,
+  65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,65,
+  65,193,193,193,193,193,193,193,193,193,193,193,193,193,193,193,
+  193,193,193,193,193,193,33,33,33,33,33,33,33,33,33,33,
+  33,33,33,33,33,33,33,33,33,33,33,161,161,161,161,161,
+  161,161,161,161,161,161,161,161,161,161,161,161,161,161,161,161,
+  97,97,97,97,97,97,97,97,97,97,97,97,97,97,97,97,
+  97,97,97,97,97,97,225,225,225,225,225,225,225,225,225,225,
+  225,225,225,225,225,225,225,225,225,225,17,17,17,17,17,17,
+  17,17,17,17,17,17,17,17,17,17,17,17,17,17,17,145,
+  145,145,145,145,145,145,145,145,145,145,145,145,145,145,145,145,
+  145,145,145,145,145,81,81,81,81,81,81,81,81,81,81,81,
+  81,81,81,81,81,81,81,81,81,81,209,209,209,209,209,209,
+  209,209,209,209,209,209,209,209,209,209,209,209,209,209,209,49,
+  49,49,49,49,49,49,49,49,49,49,49,49,49,49,49,49,
+  49,49,49,49,49,177,177,177,177,177,177,177,177,177,177,177,
+  177,177,177,177,177,177,177,177,177,177,113,113,113,113,113,113,
+  113,113,113,113,113,113,113,113,113,113,113,113,113,113,241,241,
+  241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,241,
+  241,241,241,241,9,9,9,9,9,9,9,9,9,9,9,9,
+  9,9,9,9,9,9,9,9,9,137,137,137,137,137,137,137,
+  137,137,137,137,137,137,137,137,137,137,137,137,137,137,73,73,
+  73,73,73,73,73,73,73,73,73,73,73,73,73,73,73,73,
+  73,73,73,73,201,201,201,201,201,201,201,201,201,201,201,201,
+  201,201,201,201,201,201,201,201,201,41,41,41,41,41,41,41,
+  41,41,41,41,41,41,41,41,41,41,41,41,41,41,169,169,
+  169,169,169,169,169,169,169,169,169,169,169,169,169,169,169,169,
+  169,169,169,169,105,105,105,105,105,105,105,105,105,105,105,105,
+  105,105,105,105,105,105,105,105,105,233,233,233,233,233,233,233,
+  233,233,233,233,233,233,233,233,233,233,233,233,233,233,
+};
+static const uint8_t byte8seq_3ch[510] = {
+  2,194,98,146,50,242,74,170,26,218,122,134,38,230,86,182,
+  14,206,110,158,62,254,66,162,18,210,22,114,138,42,234,90,
+  186,6,198,102,150,54,246,78,174,30,222,126,130,34,226,82,
+  178,10,202,106,154,58,250,70,166,22,214,118,142,46,238,94,
+  190,194,98,146,50,242,74,170,26,218,122,134,38,230,86,182,
+  14,206,110,158,62,254,66,162,18,210,114,138,42,234,90,186,
+  6,198,102,150,54,246,78,174,30,222,126,130,34,226,82,178,
+  10,202,106,154,58,250,70,166,22,214,118,142,46,238,94,190,
+  2,194,98,146,50,242,74,170,26,218,122,134,38,230,86,182,
+  14,206,110,158,62,254,66,162,18,210,114,138,42,234,90,186,
+  6,198,102,150,54,246,78,174,30,126,130,34,226,82,178,10,
+  202,106,154,58,250,70,166,22,214,118,142,46,238,94,190,2,
+  194,98,146,50,242,74,170,26,218,122,134,38,230,86,182,14,
+  206,110,158,62,254,66,162,18,210,114,138,42,234,90,186,6,
+  198,102,150,54,246,78,174,30,222,126,130,34,226,82,178,10,
+  202,106,154,58,250,70,166,22,214,118,142,46,238,94,190,2,
+  194,98,146,50,242,74,170,26,218,122,134,38,230,86,182,14,
+  206,110,158,62,254,66,162,18,210,114,138,42,234,90,186,6,
+  198,102,150,54,246,78,174,30,222,126,130,34,226,82,178,10,
+  202,106,154,58,250,70,166,214,118,142,46,238,94,190,2,194,
+  98,146,50,242,74,170,26,218,122,134,38,230,86,182,14,206,
+  110,158,62,254,66,162,18,210,114,138,42,234,90,186,6,198,
+  102,150,54,246,78,174,30,222,126,130,34,226,82,178,10,202,
+  106,154,58,250,70,166,22,214,118,142,46,238,94,190,2,194,
+  98,146,50,242,74,170,26,218,122,134,38,230,86,182,14,206,
+  110,158,62,254,66,162,18,210,114,138,42,234,90,186,6,198,
+  102,150,54,246,78,174,30,222,126,130,34,226,82,178,10,202,
+  106,154,58,250,70,166,22,214,118,142,46,238,94,190,2,194,
+  98,146,50,242,74,170,26,218,122,134,38,230,86,182,14,206,
+  110,158,62,254,66,162,18,210,114,138,42,234,90,186,6,198,
+  102,150,54,246,78,174,30,222,126,130,34,226,82,178,10,202,
+  106,154,58,250,70,166,22,214,118,142,46,238,94,190,
 };
 
 // ─── Global state variables ───────────────────────────────────────────────────
@@ -90,6 +163,7 @@ static bool isUnlocking    = false;  // True while unlock sequence is running
 static bool isAddressing   = false;  // True while address assignment is running
 static bool unlockDone     = false;  // True after unlock completes successfully
 static int  currentAddress = 0;      // Which fixture we are currently addressing
+static int  channelCount   = 4;      // Channels per fixture: 3 (RGB) or 4 (RGBW)
 static String statusMsg    = "IDLE"; // Displayed on the web interface
 
 // ─── Web interface HTML ───────────────────────────────────────────────────────
@@ -103,126 +177,50 @@ const char* htmlPage = R"(
   <title>Lumino Bridge</title>
   <style>
     body{font-family:Arial;background:#1a1a2e;color:white;text-align:center;padding:20px}
-    h1{color:#e94560;margin-bottom:5px}
-    .subtitle{color:#888;font-size:14px;margin-bottom:20px}
-
-    /* Status banner */
-    .banner{font-size:18px;margin:15px auto;padding:15px;border-radius:10px;max-width:400px}
-    .banner-red  {background:#4a1a1a;border:2px solid #e94560;color:#e94560}
-    .banner-yellow{background:#4a3a00;border:2px solid #f39c12;color:#f39c12}
-    .banner-green{background:#1a4a1a;border:2px solid #2ecc71;color:#2ecc71}
-
-    /* Progress bar */
-    .progress-wrap{background:#16213e;border-radius:10px;height:20px;margin:10px auto;max-width:400px;overflow:hidden;display:none}
-    .progress-bar{height:100%;width:0%;background:#e67e22;border-radius:10px;transition:width 0.3s}
-    .progress-bar.indeterminate{width:40%;animation:slide 1.5s infinite ease-in-out}
-    @keyframes slide{0%{margin-left:-40%}100%{margin-left:100%}}
-
-    /* Address counter */
-    .addr-box{font-size:18px;margin:10px;padding:10px;background:#16213e;border-radius:10px}
-    .addr-num{font-size:48px;color:#e94560;font-weight:bold}
-
-    /* Buttons */
-    .btn{padding:18px 40px;font-size:20px;border:none;border-radius:10px;cursor:pointer;margin:8px;width:80%;display:block;margin-left:auto;margin-right:auto}
+    h1{color:#e94560}
+    .btn{padding:20px 40px;font-size:20px;border:none;border-radius:10px;cursor:pointer;margin:10px;width:80%}
     .unlock{background:#e67e22;color:white}
-    .start {background:#0f3460;color:white}
-    .stop  {background:#e94560;color:white}
-    .reset {background:#533483;color:white}
-    .btn:disabled{opacity:0.3;cursor:not-allowed}
+    .start{background:#0f3460;color:white}
+    .stop{background:#e94560;color:white}
+    .reset{background:#533483;color:white}
+    .status{font-size:18px;margin:20px;padding:10px;background:#16213e;border-radius:10px}
+    .progress{font-size:48px;color:#e94560;font-weight:bold}
+    .ch-row{display:flex;justify-content:center;gap:10px;margin:10px auto;width:80%}
+    .ch-btn{flex:1;padding:14px;font-size:18px;border:none;border-radius:10px;cursor:pointer;background:#16213e;color:#888}
+    .ch-btn.active{background:#e67e22;color:white}
   </style>
   <script>
     function updateStatus(){
       fetch('/status').then(r=>r.json()).then(d=>{
-        var msg        = d.msg;
-        var running    = d.running;
-        var unlocking  = running && (msg.indexOf('UNLOCK')>=0 || msg.indexOf('BLOCK')>=0 || msg.indexOf('CLOSING')>=0);
-        var addressing = running && msg.indexOf('ADDRESS')>=0;
-        var ready      = msg.indexOf('READY')>=0;
-        var done       = msg.indexOf('DONE')>=0;
-        var stopped    = msg.indexOf('STOP')>=0 || msg.indexOf('IDLE')>=0 || msg.indexOf('RESET')>=0;
-
-        // Update status text
-        document.getElementById('statusText').innerText = msg;
-        document.getElementById('addr').innerText = d.address;
-
-        // Banner logic
-        var banner = document.getElementById('banner');
-        if(ready){
-          banner.className='banner banner-green';
-          banner.innerHTML='&#128994; Chip unlocked! Press START to address fixtures.';
-        } else if(unlocking){
-          banner.className='banner banner-yellow';
-          banner.innerHTML='&#9203; Unlocking chip, please wait...';
-        } else if(addressing){
-          banner.className='banner banner-yellow';
-          banner.innerHTML='&#9203; Addressing fixtures...';
-        } else if(done){
-          banner.className='banner banner-green';
-          banner.innerHTML='&#128994; All fixtures addressed successfully!';
-        } else {
-          banner.className='banner banner-red';
-          banner.innerHTML='&#128308; Please press UNLOCK before addressing fixtures.';
-        }
-
-        // Progress bar
-        var pw = document.getElementById('progressWrap');
-        var pb = document.getElementById('progressBar');
-        if(unlocking || addressing){
-          pw.style.display='block';
-          pb.className='progress-bar indeterminate';
-        } else if(done){
-          pw.style.display='block';
-          pb.className='progress-bar';
-          pb.style.width='100%';
-          pb.style.background='#2ecc71';
-        } else {
-          pw.style.display='none';
-          pb.style.width='0%';
-          pb.style.background='#e67e22';
-          pb.className='progress-bar';
-        }
-
-        // Button states
-        // On load (idle/reset): only UNLOCK enabled
-        // While unlocking: only STOP enabled
-        // Ready: START + STOP + RESET enabled, UNLOCK disabled
-        // While addressing: only STOP enabled
-        // Done: RESET enabled
-        document.getElementById('btnUnlock').disabled = unlocking || addressing || ready || done;
-        document.getElementById('btnStart').disabled  = unlocking || addressing || !ready;
-        document.getElementById('btnStop').disabled   = !running;
-        document.getElementById('btnReset').disabled  = unlocking || addressing;
+        document.getElementById('addr').innerText=d.address;
+        document.getElementById('state').innerText=d.msg;
+        document.getElementById('btn3ch').className='ch-btn'+(d.channels===3?' active':'');
+        document.getElementById('btn4ch').className='ch-btn'+(d.channels===4?' active':'');
       });
     }
-    function unlock(){ fetch('/unlock').then(()=>updateStatus()) }
-    function start(){  fetch('/start').then(()=>updateStatus())  }
-    function stop(){   fetch('/stop').then(()=>updateStatus())   }
-    function reset(){  fetch('/reset').then(()=>updateStatus())  }
-    setInterval(updateStatus, 500);
+    function unlock(){fetch('/unlock').then(()=>updateStatus())}
+    function start(){fetch('/start').then(()=>updateStatus())}
+    function stop(){fetch('/stop').then(()=>updateStatus())}
+    function reset(){fetch('/reset').then(()=>updateStatus())}
+    function setChannels(n){fetch('/setchannels?n='+n).then(()=>updateStatus())}
+    setInterval(updateStatus,500);
     updateStatus();
   </script>
 </head>
 <body>
-  <h1>&#128275; Lumino Bridge</h1>
-  <p class='subtitle'>UCS512C DMX Fixture Programmer</p>
-
-  <div class='banner banner-red' id='banner'>
-    &#128308; Please press UNLOCK before addressing fixtures.
+  <h1>Lumino Bridge</h1>
+  <div class='status'>Channel mode:
+    <div class='ch-row'>
+      <button id='btn3ch' class='ch-btn' onclick='setChannels(3)'>3CH (RGB)</button>
+      <button id='btn4ch' class='ch-btn active' onclick='setChannels(4)'>4CH (RGBW)</button>
+    </div>
   </div>
-
-  <div class='progress-wrap' id='progressWrap'>
-    <div class='progress-bar' id='progressBar'></div>
-  </div>
-
-  <div class='addr-box'>
-    Address: <span class='addr-num' id='addr'>0</span> / 512
-    <br><small id='statusText' style='color:#888'>IDLE</small>
-  </div>
-
-  <button class='btn unlock' id='btnUnlock' onclick='unlock()'>&#128275; UNLOCK</button>
-  <button class='btn start'  id='btnStart'  onclick='start()'  disabled>&#9654; START</button>
-  <button class='btn stop'   id='btnStop'   onclick='stop()'   disabled>&#9632; STOP</button>
-  <button class='btn reset'  id='btnReset'  onclick='reset()'  disabled>&#8635; RESET</button>
+  <div class='status'>Status: <span id='state'>IDLE</span></div>
+  <div class='status'>Address: <span class='progress' id='addr'>0</span> / 512</div>
+  <button class='btn unlock' onclick='unlock()'>&#128275; UNLOCK</button>
+  <button class='btn start'  onclick='start()'>&#9654; START</button>
+  <button class='btn stop'   onclick='stop()'>&#9632; STOP</button>
+  <button class='btn reset'  onclick='reset()'>&#8635; RESET</button>
 </body>
 </html>
 )";
@@ -274,11 +272,11 @@ static void sendDMXFrame(uint8_t* buf, int len) {
 // This is the "hello, I am a DMX controller" signal that wakes up fixtures
 // Used at the start of unlock AND before address assignment
 static void send6InitFrames() {
-  uint8_t buf[DMX_FRAME_SIZE];
-  memset(buf, 0x00, DMX_FRAME_SIZE);
+  int frameSize = DMX_ADDRESSES * channelCount;
+  memset(dmxBuf, 0x00, frameSize);
   for (int i = 0; i < 6; i++) {
     if (stopRequested) return;
-    sendDMXFrame(buf, DMX_FRAME_SIZE);
+    sendDMXFrame(dmxBuf, frameSize);
     delay(INIT_PAUSE);
   }
 }
@@ -294,42 +292,42 @@ static void send6InitFrames() {
 // is finished and they should enter address-receive mode.
 //
 static void sendClosingFrames() {
+  int frameSize = DMX_ADDRESSES * channelCount;
 
   // ── First 3 frames: all zeros ──────────────────────────────────────────────
-  uint8_t zeroBuf[DMX_FRAME_SIZE];
-  memset(zeroBuf, 0x00, DMX_FRAME_SIZE);
+  memset(dmxBuf, 0x00, frameSize);
   for (int i = 0; i < 3; i++) {
     if (stopRequested) return;
-    sendDMXFrame(zeroBuf, DMX_FRAME_SIZE);
+    sendDMXFrame(dmxBuf, frameSize);
     delay(INIT_PAUSE);
   }
 
   // ── Last 3 frames: closing pattern ────────────────────────────────────────
-  uint8_t wBuf[DMX_FRAME_SIZE];
-  memset(wBuf, 0x00, DMX_FRAME_SIZE);
+  //
+  // Byte 0:                    0 (DMX start code, from memset)
+  // Bytes 1..channelCount+1:   all 127  (channelCount+1 values)
+  // From byte channelCount+2:  repeat every channelCount bytes:
+  //                              (channelCount-1) × 0  then  127
+  //
+  // 3CH: 0, 127,127,127,127, 0,0,127, 0,0,127 ...
+  // 4CH: 0, 127,127,127,127,127, 0,0,0,127, 0,0,0,127 ...
+  //
+  memset(dmxBuf, 0x00, frameSize);
 
-  // Address 1 (byte positions 1-4): all channels = 127
-  if (1 + DMX_CHANNELS <= DMX_FRAME_SIZE) {
-    wBuf[1] = 127;  // R
-    wBuf[2] = 127;  // G
-    wBuf[3] = 127;  // B
-    wBuf[4] = 127;  // W
+  // Bytes 1 to channelCount+1 = 127
+  for (int c = 1; c <= channelCount + 1 && c < frameSize; c++) {
+    dmxBuf[c] = 127;
   }
 
-  // Addresses 2 through 512: only W = 127, RGB = 0
-  for (int addr = 1; addr < DMX_ADDRESSES; addr++) {
-    int pos = 1 + addr * DMX_CHANNELS;  // +1 = skip the DMX start code byte
-    if (pos + DMX_CHANNELS <= DMX_FRAME_SIZE) {
-      wBuf[pos]     = 0;    // R = off
-      wBuf[pos + 1] = 0;    // G = off
-      wBuf[pos + 2] = 0;    // B = off
-      wBuf[pos + 3] = 127;  // W = 50%
-    }
+  // From channelCount+2: last byte of each channelCount-block = 127
+  int startPos = channelCount + 2;
+  for (int pos = startPos; pos + channelCount - 1 < frameSize; pos += channelCount) {
+    dmxBuf[pos + channelCount - 1] = 127;
   }
 
   for (int i = 0; i < 3; i++) {
     if (stopRequested) return;
-    sendDMXFrame(wBuf, DMX_FRAME_SIZE);
+    sendDMXFrame(dmxBuf, frameSize);
     delay(INIT_PAUSE);
   }
 }
@@ -363,39 +361,90 @@ static void sendClosingFrames() {
 //
 static void sendTransitionBlock(uint8_t mode) {
 
-  // Lead-in: bus HIGH ~119µs → send 0x00 sync byte → bus HIGH ~162µs
-  digitalWrite(PIN_DE, LOW);        // Bus HIGH (idle)
-  delayMicroseconds(68);            // 68µs + ~51µs overhead = ~119µs on wire
-  digitalWrite(PIN_DE, HIGH);       // Enable transmitter
+  // ── Timing values per channel mode and stub ──────────────────────────────────
+  //
+  // Target wire timings (measured from K1000C logic analyzer):
+  // Both stubs identical: H144.25µs → L36µs → H186.25µs → gap 186.75µs
+  //
+  // 4CH stub 1 current → target:
+  //   PRE: delay=82 → 106.75µs, need 144.25µs → delay=119
+  //   MAB: delay=151 → 189.75µs, need 186.25µs → delay=147
+  //   GAP: delay=167 → 201µs,    need 186.75µs → delay=154
+  //
+  // 4CH stub 2 current → target:
+  //   PRE: delay=71 → 87µs,    need 144.25µs → delay=128
+  //   MAB: delay=145 → 177.25µs, need 186.25µs → delay=154
+  //   GAP: delay=168 → 201.5µs,  need 186.75µs → delay=154
+  //
+  // 3CH: estimates based on K1000C capture — verify with analyzer
+  //
+  int T_PRE_SYNC, T_MAB_SYNC, T_GAP;
+  if (channelCount == 3) {
+    T_PRE_SYNC = 133;   // → ~144.5µs
+    T_MAB_SYNC = 150;   // → ~186µs
+    T_GAP      = 147;   // → ~186.5µs
+  } else if (mode == 1) {
+    T_PRE_SYNC = 119;   // → ~144.25µs
+    T_MAB_SYNC = 147;   // → ~186.25µs
+    T_GAP      = 154;   // → ~186.75µs
+  } else {
+    T_PRE_SYNC = 128;   // → ~144.25µs
+    T_MAB_SYNC = 154;   // → ~186.25µs
+    T_GAP      = 154;   // → ~186.75µs
+  }
+
+  // Lead-in: bus HIGH → send 0x00 sync byte → bus HIGH (MAB)
+  digitalWrite(PIN_DE, LOW);
+  delayMicroseconds(T_PRE_SYNC);
+  digitalWrite(PIN_DE, HIGH);
 
   uint8_t zero = 0x00;
-  Serial1.write(&zero, 1);          // Send 0x00 sync byte
+  Serial1.write(&zero, 1);
   Serial1.flush();
   delayMicroseconds(12);            // Wait for stop bits
-  digitalWrite(PIN_DE, LOW);        // Bus HIGH (MAB)
-  delayMicroseconds(149);           // 149µs + ~37µs overhead = ~162µs on wire (tuned)
+  digitalWrite(PIN_DE, LOW);
+  delayMicroseconds(T_MAB_SYNC);
 
-  // Send 512 data packets
+  // Send data packets
+  // 4CH: 32 × 16 = 512 packets (nested loop, same byte8 for every byte7 group)
+  // 3CH: 510 packets (flat sequence — groups have varying byte8 counts)
   uint8_t seq[8] = {85, 15, 44, 170, 53, mode, 0, 0};
 
-  for (int i = 0; i < 32; i++) {
-    for (int j = 0; j < 16; j++) {
+  if (channelCount == 4) {
+    for (int i = 0; i < 32; i++) {
+      for (int j = 0; j < 16; j++) {
+        if (stopRequested) return;
+
+        seq[6] = byte7vals_4ch[i];
+        seq[7] = byte8vals_4ch[j];
+
+        digitalWrite(PIN_DE, HIGH);
+        Serial1.write(seq, 8);
+        Serial1.flush();
+        delayMicroseconds(12);
+        digitalWrite(PIN_DE, LOW);
+
+        if (!(i == 31 && j == 15)) {
+          delayMicroseconds(T_GAP);
+        }
+      }
+    }
+  } else {
+    // 3CH: flat sequence of 510 entries
+    for (int k = 0; k < 510; k++) {
       if (stopRequested) return;
 
-      seq[6] = byte7vals[i];
-      seq[7] = byte8vals[j];
+      seq[6] = byte7seq_3ch[k];
+      seq[7] = byte8seq_3ch[k];
 
-      digitalWrite(PIN_DE, HIGH);   // Enable transmitter
-      Serial1.write(seq, 8);        // Send 8-byte packet
+      digitalWrite(PIN_DE, HIGH);
+      Serial1.write(seq, 8);
       Serial1.flush();
-      delayMicroseconds(12);        // Wait for stop bits
+      delayMicroseconds(12);
+      digitalWrite(PIN_DE, LOW);
 
-      digitalWrite(PIN_DE, LOW);    // Bus HIGH (inter-packet gap)
-
-      // All packets except the last get a 174µs gap
-      // Last packet: no gap — caller controls what happens next
-      if (!(i == 31 && j == 15)) {
-        delayMicroseconds(174);
+      if (k < 509) {
+        delayMicroseconds(T_GAP);
       }
     }
   }
@@ -507,22 +556,22 @@ static void runUnlock() {
 //   addresses to give the fixture time to store the address in memory.
 //
 static void sendAddress(int address) {
-  // Build DMX frame: all zeros except the target address slot = 0x7F
-  memset(dmxBuf, 0x00, DMX_FRAME_SIZE);
-  int pos = (address - 1) * DMX_CHANNELS;  // Byte offset in the frame
-  if (pos + DMX_CHANNELS <= DMX_FRAME_SIZE) {
-    for (int i = 0; i < DMX_CHANNELS; i++) {
-      dmxBuf[pos + i] = MARKER_BYTE;  // 0x7F = "claim this address"
+  int frameSize = DMX_ADDRESSES * channelCount;
+  memset(dmxBuf, 0x00, frameSize);
+  int pos = (address - 1) * channelCount;
+  if (pos + channelCount <= frameSize) {
+    for (int i = 0; i < channelCount; i++) {
+      dmxBuf[pos + i] = MARKER_BYTE;
     }
   }
 
   // Send the frame twice (confirmed more reliable than once)
-  sendDMXFrame(dmxBuf, DMX_FRAME_SIZE);
+  sendDMXFrame(dmxBuf, frameSize);
   if (stopRequested) return;
-  delayMicroseconds(2000);                // 2ms gap between the two sends
-  sendDMXFrame(dmxBuf, DMX_FRAME_SIZE);
+  delayMicroseconds(2000);
+  sendDMXFrame(dmxBuf, frameSize);
   if (stopRequested) return;
-  delay(PAUSE_BETWEEN);                   // 290ms before moving to next address
+  delay(PAUSE_BETWEEN);
 }
 
 // =============================================================================
@@ -576,11 +625,22 @@ void handleReset() {
   server.send(200, "text/plain", "OK");
 }
 
+// SETCHANNELS: set channel mode (3 or 4), only when not running
+void handleSetChannels() {
+  if (!isUnlocking && !isAddressing) {
+    String n = server.arg("n");
+    if (n == "3") channelCount = 3;
+    else          channelCount = 4;
+  }
+  server.send(200, "text/plain", "OK");
+}
+
 // STATUS: called every 500ms by the web page to refresh the display
 void handleStatus() {
-  String json = "{\"running\":"  + String((isUnlocking || isAddressing) ? "true" : "false") +
-                ",\"address\":"  + String(currentAddress) +
-                ",\"msg\":\""    + statusMsg + "\"}";
+  String json = "{\"running\":"   + String((isUnlocking || isAddressing) ? "true" : "false") +
+                ",\"address\":"   + String(currentAddress) +
+                ",\"channels\":"  + String(channelCount) +
+                ",\"msg\":\""     + statusMsg + "\"}";
   server.send(200, "application/json", json);
 }
 
@@ -608,12 +668,13 @@ void setup() {
   Serial.println("WiFi AP ready. SSID: " + String(ssid));
   Serial.println("Open browser: http://" + WiFi.softAPIP().toString());
 
-  server.on("/",       handleRoot);
-  server.on("/unlock", handleUnlock);
-  server.on("/start",  handleStart);
-  server.on("/stop",   handleStop);
-  server.on("/reset",  handleReset);
-  server.on("/status", handleStatus);
+  server.on("/",            handleRoot);
+  server.on("/unlock",      handleUnlock);
+  server.on("/start",       handleStart);
+  server.on("/stop",        handleStop);
+  server.on("/reset",       handleReset);
+  server.on("/setchannels", handleSetChannels);
+  server.on("/status",      handleStatus);
   server.begin();
 
   Serial.println("=== Lumino Bridge ready ===");
