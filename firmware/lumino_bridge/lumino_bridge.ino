@@ -177,50 +177,153 @@ const char* htmlPage = R"(
   <title>Lumino Bridge</title>
   <style>
     body{font-family:Arial;background:#1a1a2e;color:white;text-align:center;padding:20px}
-    h1{color:#e94560}
-    .btn{padding:20px 40px;font-size:20px;border:none;border-radius:10px;cursor:pointer;margin:10px;width:80%}
+    h1{color:#e94560;margin-bottom:4px}
+    .sub{color:#888;font-size:13px;margin-bottom:20px}
+    .btn{padding:18px 40px;font-size:18px;border:none;border-radius:10px;cursor:pointer;margin:8px;width:80%;display:block;margin-left:auto;margin-right:auto;transition:opacity 0.2s}
+    .btn:disabled{opacity:0.25;cursor:not-allowed}
     .unlock{background:#e67e22;color:white}
-    .start{background:#0f3460;color:white}
+    .start{background:#27ae60;color:white}
     .stop{background:#e94560;color:white}
     .reset{background:#533483;color:white}
-    .status{font-size:18px;margin:20px;padding:10px;background:#16213e;border-radius:10px}
-    .progress{font-size:48px;color:#e94560;font-weight:bold}
-    .ch-row{display:flex;justify-content:center;gap:10px;margin:10px auto;width:80%}
-    .ch-btn{flex:1;padding:14px;font-size:18px;border:none;border-radius:10px;cursor:pointer;background:#16213e;color:#888}
-    .ch-btn.active{background:#e67e22;color:white}
+    .card{margin:15px auto;padding:12px 20px;background:#16213e;border-radius:10px;max-width:400px}
+    .msg{font-size:16px;color:#ccc;line-height:1.5}
+    .msg.ok{color:#2ecc71}
+    .msg.warn{color:#f39c12}
+    .progress{font-size:44px;color:#e94560;font-weight:bold}
+    .ch-row{display:flex;justify-content:center;gap:10px;margin:10px auto;width:80%;max-width:320px}
+    .ch-btn{flex:1;padding:14px;font-size:17px;border:none;border-radius:10px;cursor:pointer;background:#0d1b2a;color:#888;border:2px solid #333}
+    .ch-btn.active{background:#e67e22;color:white;border-color:#e67e22}
+    .ch-btn:disabled{opacity:0.3;cursor:not-allowed}
+    .pbar-wrap{background:#0d1b2a;border-radius:8px;height:18px;margin:12px auto;max-width:360px;overflow:hidden;display:none}
+    .pbar{height:100%;width:0%;background:#e67e22;border-radius:8px;transition:width 0.5s linear}
+    .pbar.done{background:#2ecc71}
   </style>
   <script>
+    var unlockStart = 0;
+    var unlockDuration = 10000; // 10 seconds measured with logic analyzer
+    var pbarTimer = null;
+
+    function startProgressBar(){
+      unlockStart = Date.now();
+      document.getElementById('pbarWrap').style.display='block';
+      document.getElementById('pbar').className='pbar';
+      document.getElementById('pbar').style.width='0%';
+      if(pbarTimer) clearInterval(pbarTimer);
+      pbarTimer = setInterval(function(){
+        var elapsed = Date.now() - unlockStart;
+        var pct = Math.min(95, (elapsed / unlockDuration) * 100);
+        document.getElementById('pbar').style.width = pct + '%';
+      }, 100);
+    }
+
+    function finishProgressBar(){
+      if(pbarTimer){ clearInterval(pbarTimer); pbarTimer=null; }
+      document.getElementById('pbar').style.width='100%';
+      document.getElementById('pbar').className='pbar done';
+      setTimeout(function(){
+        document.getElementById('pbarWrap').style.display='none';
+        document.getElementById('pbar').style.width='0%';
+        document.getElementById('pbar').className='pbar';
+      }, 1500);
+    }
+
     function updateStatus(){
       fetch('/status').then(r=>r.json()).then(d=>{
-        document.getElementById('addr').innerText=d.address;
-        document.getElementById('state').innerText=d.msg;
+        var msg       = d.msg;
+        var running   = d.running;
+        var unlocking = running && msg.indexOf('UNLOCK')>=0;
+        var addressing= running && msg.indexOf('ADDRESS')>=0;
+        var ready     = msg.indexOf('READY')>=0;
+        var done      = msg.indexOf('DONE')>=0;
+
+        // Finish progress bar when unlock completes
+        if(!unlocking && unlockStart!==0 && !pbarTimer===false){
+          finishProgressBar();
+          unlockStart=0;
+        }
+
+        // Reset bar on full reset
+        if(!running && !ready && !done && unlockStart===0){
+          document.getElementById('pbarWrap').style.display='none';
+          document.getElementById('pbar').style.width='0%';
+        }
+
+        // Channel buttons
         document.getElementById('btn3ch').className='ch-btn'+(d.channels===3?' active':'');
         document.getElementById('btn4ch').className='ch-btn'+(d.channels===4?' active':'');
+        document.getElementById('btn3ch').disabled = running;
+        document.getElementById('btn4ch').disabled = running;
+
+        // Address counter
+        document.getElementById('addr').innerText = d.address > 0 ? d.address : '';
+
+        // Status message
+        var msgEl = document.getElementById('state');
+        if(!running && !ready && !done){
+          msgEl.className='msg';
+          msgEl.innerHTML='Select <b>3CH</b> or <b>4CH</b> to match your fixtures,<br>then press <b>UNLOCK</b> to program UCS512C';
+        } else if(unlocking){
+          msgEl.className='msg warn';
+          msgEl.innerHTML='&#9203; ' + msg;
+        } else if(addressing){
+          msgEl.className='msg warn';
+          msgEl.innerHTML='&#9203; Addressing fixture <b>' + d.address + '</b> / 512';
+        } else if(ready){
+          msgEl.className='msg ok';
+          msgEl.innerHTML='&#128994; Unlock complete!<br>Press <b>START</b> to begin addressing,<br>or <b>RESET</b> to change channel mode';
+        } else if(done){
+          msgEl.className='msg ok';
+          msgEl.innerHTML='&#127881; All fixtures addressed!<br>Press <b>RESET</b> to start over';
+        } else {
+          msgEl.className='msg';
+          msgEl.innerHTML=msg;
+        }
+
+        // Button states
+        document.getElementById('btnUnlock').disabled = running || ready || done;
+        document.getElementById('btnStart').disabled  = !ready;
+        document.getElementById('btnStop').disabled   = !addressing;
+        document.getElementById('btnReset').disabled  = unlocking;
       });
     }
-    function unlock(){fetch('/unlock').then(()=>updateStatus())}
+    function unlock(){
+      document.getElementById('btnUnlock').disabled = true;
+      document.getElementById('btnReset').disabled = true;
+      document.getElementById('btn3ch').disabled = true;
+      document.getElementById('btn4ch').disabled = true;
+      startProgressBar();
+      fetch('/unlock').then(()=>updateStatus());
+    }
     function start(){fetch('/start').then(()=>updateStatus())}
     function stop(){fetch('/stop').then(()=>updateStatus())}
-    function reset(){fetch('/reset').then(()=>updateStatus())}
+    function reset(){fetch('/reset').then(()=>{ window.location.reload(); })}
     function setChannels(n){fetch('/setchannels?n='+n).then(()=>updateStatus())}
     setInterval(updateStatus,500);
     updateStatus();
   </script>
 </head>
 <body>
-  <h1>Lumino Bridge</h1>
-  <div class='status'>Channel mode:
+  <h1>&#9889; Lumino Bridge</h1>
+  <p class='sub'>UCS512C RS-485 fixture programmer</p>
+
+  <div class='card'>
+    <div style='color:#888;font-size:13px;margin-bottom:8px'>CHANNEL MODE</div>
     <div class='ch-row'>
-      <button id='btn3ch' class='ch-btn' onclick='setChannels(3)'>3CH (RGB)</button>
-      <button id='btn4ch' class='ch-btn active' onclick='setChannels(4)'>4CH (RGBW)</button>
+      <button id='btn3ch' class='ch-btn' onclick='setChannels(3)'>3CH<br><small>RGB</small></button>
+      <button id='btn4ch' class='ch-btn active' onclick='setChannels(4)'>4CH<br><small>RGBW</small></button>
     </div>
   </div>
-  <div class='status'>Status: <span id='state'>IDLE</span></div>
-  <div class='status'>Address: <span class='progress' id='addr'>0</span> / 512</div>
-  <button class='btn unlock' onclick='unlock()'>&#128275; UNLOCK</button>
-  <button class='btn start'  onclick='start()'>&#9654; START</button>
-  <button class='btn stop'   onclick='stop()'>&#9632; STOP</button>
-  <button class='btn reset'  onclick='reset()'>&#8635; RESET</button>
+
+  <div class='card'>
+    <div id='state' class='msg'>Select <b>3CH</b> or <b>4CH</b> to match your fixtures,<br>then press <b>UNLOCK</b> to program UCS512C</div>
+    <div class='pbar-wrap' id='pbarWrap'><div class='pbar' id='pbar'></div></div>
+    <div class='progress' id='addr'></div>
+  </div>
+
+  <button class='btn unlock' id='btnUnlock' onclick='unlock()'>&#128275; UNLOCK</button>
+  <button class='btn start'  id='btnStart'  onclick='start()' disabled>&#9654; START</button>
+  <button class='btn stop'   id='btnStop'   onclick='stop()'  disabled>&#9632; STOP</button>
+  <button class='btn reset'  id='btnReset'  onclick='reset()'>&#8635; RESET</button>
 </body>
 </html>
 )";
