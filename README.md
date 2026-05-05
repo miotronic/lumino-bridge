@@ -102,7 +102,7 @@ This will make deploying a full room of RS-485 fixtures as seamless as any off-t
 If you want to help build it or test early builds, watch this repo and open an issue.
 
 ## License
-MIT — free to use, modify, and distribute. See LICENSE.
+GPL v3 — free to use and modify for personal and non-commercial use. Commercial use requires written permission from the author. See LICENSE.
 
 ## Support the project
 If this saved you hours of frustration, consider buying me a coffee ☕
